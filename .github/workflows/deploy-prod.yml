@@ -1,0 +1,142 @@
+name: Deploy Prod
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE"
+  workflow_dispatch:
+
+concurrency:
+  group: terraform-prod
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Pin npm version (match package-lock.json)
+        run: npm install -g npm@11.6.2
+
+      - name: Cache node modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Pin npm version (match package-lock.json)
+        run: npm install -g npm@11.6.2
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Install production dependencies only
+        run: npm ci --production
+
+      - name: Package Lambda function
+        run: |
+          cp -r node_modules dist/
+          cp package.json dist/
+
+          cd dist
+          zip -r customers.zip . -x "*.map"
+          cd ..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-package-prod
+          path: dist/customers.zip
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      TF_ENV: prod
+      TF_VAR_sendgrid_api_key: ${{ secrets.SENDGRID_API_KEY }}
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Lambda artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-package-prod
+          path: dist
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.3
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -reconfigure -input=false -backend-config=backend-${TF_ENV}.hcl
+
+      - name: Terraform Format Check
+        working-directory: terraform
+        run: terraform fmt -check
+        continue-on-error: true
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: terraform plan -input=false -var-file=${TF_ENV}.tfvars -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Output API URL
+        working-directory: terraform
+        run: terraform output api_gateway_url
