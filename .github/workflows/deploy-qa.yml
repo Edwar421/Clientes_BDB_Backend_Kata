@@ -18,6 +18,12 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: test-password
+      DB_NAME: clientes_bdb_test
 
     steps:
       - name: Checkout code
