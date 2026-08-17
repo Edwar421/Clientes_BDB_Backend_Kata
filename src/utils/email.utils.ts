@@ -110,7 +110,7 @@ export class EmailService {
 
         if (!apiKey || !fromEmail) {
             throw new Error(
-                "Configura SENDGRID_API_KEY y SENDGRID_FROM_EMAIL para enviar correos. "
+                "Configura SENDGRID_API_KEY y SENDGRID_FROM_EMAIL para enviar correos."
             );
         }
 
